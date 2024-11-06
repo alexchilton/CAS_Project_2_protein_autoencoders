@@ -1,28 +1,14 @@
-import os
-import random
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import seaborn as sns
-import glob
-import Bio
-
 from Bio.PDB.PDBParser import PDBParser
-from Bio.PDB.internal_coords import *
+import numpy as np
+import pandas as pd
+import torch
 from Bio.PDB import NeighborSearch
-from Bio.PDB.Polypeptide import PPBuilder
-from Bio.PDB import parse_pdb_header
 from Bio.PDB import Selection
-
-
-
-
-import matplotlib.lines as mlines
-from jinja2.async_utils import auto_to_list
-from mpl_toolkits.mplot3d import Axes3D
-
-import protein_parser
-from protein_parser import aa_info_dict
+from Bio.PDB.PDBParser import PDBParser
+from sklearn.preprocessing import LabelEncoder
+from torch_geometric.data import Data
+import networkx as nx
+import matplotlib.pyplot as plt
 
 class ProteinAnalyzer:
     def __init__(self, pdb_file, aa_info_file):
@@ -90,12 +76,23 @@ class ProteinAnalyzer:
     def encode_amino_acid_properties(self, aa_letters):
         encoded_features = []
         for aa in aa_letters:
-            if aa in self.aa_info_dict_short:
-                avg_mass = self.aa_info_dict_short[aa]['Avg. mass (Da)']
-                encoded_features.append([avg_mass])
+            aa_str = aa[0]  # Convert numpy array to string
+            if aa_str in self.aa_info_dict_short:
+                avg_mass = self.aa_info_dict_short[aa_str]['Avg. mass (Da)']
+                encoded_features.append([aa_str, avg_mass])
             else:
-                encoded_features.append([0])
+                encoded_features.append([aa_str, 0])
         return np.array(encoded_features)
+
+    def prepare_autoencoder_input(self):
+        coords = self.c_alpha_df[['X', 'Y', 'Z']].values
+        aa_letters = self.c_alpha_df['AA'].values.reshape(-1, 1)  # Reshape to add as a column
+        encoded_features = self.encode_amino_acid_properties(aa_letters)
+        neighborhood_info = self.calculate_neighborhood_info()
+        autoencoder_input = np.hstack([coords, encoded_features, np.array(neighborhood_info)])
+        columns = ['X', 'Y', 'Z', 'AA','Avg_Mass', 'Avg_Neighbor_Dist', 'Max_Neighbor_Dist', 'Neighbor_Count']
+        return pd.DataFrame(autoencoder_input, columns=columns)
+
 
     def calculate_neighborhood_info(self, neighborhood_radius=5.0):
         atom_list = [atom for atom in self.structure.get_atoms() if atom.name == 'CA']
@@ -112,14 +109,8 @@ class ProteinAnalyzer:
                 neighborhood_info.append([avg_distance, max_distance, count_neighbors])
         return neighborhood_info
 
-    def prepare_autoencoder_input(self):
-        coords = self.c_alpha_df[['X', 'Y', 'Z']].values
-        aa_letters = self.c_alpha_df['AA']
-        encoded_features = self.encode_amino_acid_properties(aa_letters)
-        neighborhood_info = self.calculate_neighborhood_info()
-        autoencoder_input = np.hstack([coords, encoded_features, np.array(neighborhood_info)])
-        columns = ['X', 'Y', 'Z', 'Avg_Mass', 'Avg_Neighbor_Dist', 'Max_Neighbor_Dist', 'Neighbor_Count']
-        return pd.DataFrame(autoencoder_input, columns=columns)
+
+
 
     def pad_dataframe(self, df, target_shape):
         current_shape = df.shape
@@ -133,6 +124,60 @@ class ProteinAnalyzer:
             padded_df = df
         return padded_df
 
+    def create_graph(df, distance_threshold=5.0):
+        # Label encode the 'AA' column
+        le = LabelEncoder()
+        df['AA_encoded'] = le.fit_transform(df['AA'])
+
+        # Ensure all columns are numeric
+        df[['X', 'Y', 'Z', 'Avg_Mass', 'Avg_Neighbor_Dist', 'Max_Neighbor_Dist', 'Neighbor_Count']] = df[['X', 'Y', 'Z', 'Avg_Mass', 'Avg_Neighbor_Dist', 'Max_Neighbor_Dist', 'Neighbor_Count']].apply(pd.to_numeric, errors='coerce')
+
+        # Extract node features (XYZ coordinates, encoded AA, and other features)
+        node_features = torch.tensor(df[['X', 'Y', 'Z', 'AA_encoded', 'Avg_Mass', 'Avg_Neighbor_Dist', 'Max_Neighbor_Dist', 'Neighbor_Count']].values, dtype=torch.float)
+
+        # Calculate pairwise distances
+        coordinates = df[['X', 'Y', 'Z']].values
+        num_nodes = coordinates.shape[0]
+        distance_matrix = np.zeros((num_nodes, num_nodes))
+        for i in range(num_nodes):
+            for j in range(i + 1, num_nodes):
+                dist = np.linalg.norm(coordinates[i] - coordinates[j])
+                distance_matrix[i, j] = dist
+                distance_matrix[j, i] = dist
+
+        # Define edges based on the distance threshold
+        edge_index = []
+        for i in range(num_nodes):
+            for j in range(i + 1, num_nodes):
+                if distance_matrix[i, j] <= distance_threshold:
+                    edge_index.append([i, j])
+                    edge_index.append([j, i])
+
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+
+        # Create the Data object
+        data = Data(x=node_features, edge_index=edge_index)
+        data.aa_labels = df['AA'].values  # Store the amino acid labels
+        return data, le
+
+    def print_graph_metrics(graph):
+        print(f"Number of nodes: {graph.num_nodes}")
+        print(f"Number of edges: {graph.num_edges}")
+        print(f"Node features shape: {graph.x.shape}")
+
+    def draw_graph(graph, le):
+        G = nx.Graph()
+        edge_index = graph.edge_index.numpy()
+        for i in range(edge_index.shape[1]):
+            G.add_edge(edge_index[0, i], edge_index[1, i])
+
+        pos = nx.spring_layout(G)
+        aa_labels = graph.aa_labels
+        node_colors = [plt.cm.tab20(le.transform([aa])[0] % 20) for aa in aa_labels]  # Color code nodes
+
+        nx.draw(G, pos, with_labels=True, labels={i: aa_labels[i] for i in range(len(aa_labels))}, node_color=node_colors, node_size=50, font_size=8)
+        plt.show()
+
 pdb_file = '/Users/alexchilton/Downloads/archive/train/AF-D0ZA02-F1-model_v4.pdb'
 aa_info_file = 'aa_mass_letter.csv'
 analyzer = ProteinAnalyzer(pdb_file, aa_info_file)
@@ -140,33 +185,7 @@ analyzer = ProteinAnalyzer(pdb_file, aa_info_file)
 # Generate the autoencoder input DataFrame
 autoencoder_input_df = analyzer.prepare_autoencoder_input()
 
+pd.set_option('display.max_columns', None)
 
-import os
-import pandas as pd
-from ProteinAnalyzer import ProteinAnalyzer
-
-# Define the directory containing the PDB files and the amino acid information file
-pdb_directory = '/Users/alexchilton/Downloads/archive/just100'
-
-# Initialize an array to store the autoencoder input DataFrames
-autoencoder_input_dfs = []
-
-# Loop over each file in the directory
-for pdb_file in os.listdir(pdb_directory):
-    if pdb_file.endswith('.pdb'):
-        pdb_path = os.path.join(pdb_directory, pdb_file)
-
-        # Initialize the ProteinAnalyzer with the PDB file and amino acid information file
-        analyzer = ProteinAnalyzer(pdb_path, aa_info_file)
-
-        # Generate the autoencoder input DataFrame
-        autoencoder_input_df = analyzer.prepare_autoencoder_input()
-
-        # Add the DataFrame to the array
-        autoencoder_input_dfs.append(autoencoder_input_df)
-
-# Now autoencoder_input_dfs contains all the DataFrames
-# Loop through the autoencoder input DataFrames and print their dimensions
-for i, df in enumerate(autoencoder_input_dfs):
-    print(f"DataFrame {i+1} dimensions: {df.shape}")
-    
+print(autoencoder_input_df.shape)
+print(autoencoder_input_df.head())
