@@ -10,6 +10,9 @@ from torch_geometric.data import Data
 import networkx as nx
 import matplotlib.pyplot as plt
 
+### would be better if everything was being read in as floats...!!!
+
+
 class ProteinAnalyzer:
     def __init__(self, pdb_file, aa_info_file):
         self.pdb_file = pdb_file
@@ -21,14 +24,17 @@ class ProteinAnalyzer:
         self.c_alpha_df = self.extract_c_alpha_info()
 
     def get_aa_info_dict(self):
+        '''Read the amino acid info file and return a dictionary with the amino acid properties.'''
         aa_info = pd.read_csv(self.aa_info_file)
         return aa_info.set_index('Abbrev.').to_dict(orient='index')
 
     def get_aa_info_dict_short(self):
+        '''Read the amino acid info file and return a dictionary with the amino acid properties.'''
         aa_info = pd.read_csv(self.aa_info_file)
         return aa_info.set_index('Short').to_dict(orient='index')
 
     def get_residue_info(self, res_name):
+        '''Return the short name of the amino acid given the residue name.'''
         if res_name in self.aa_info_dict:
             return self.aa_info_dict[res_name]['Short']
         else:
@@ -36,6 +42,7 @@ class ProteinAnalyzer:
             return None
 
     def process_residue(self, residue, res_name, c_alpha_matrix):
+        '''Process a residue and extract the C-alpha atom coordinates,.'''
         if 'CA' in residue:
             ca_atom = residue['CA']
             x, y, z = ca_atom.get_coord()
@@ -48,14 +55,16 @@ class ProteinAnalyzer:
             print(f"No C-alpha atom found for residue {res_name} in chain {residue.parent.id}")
 
     def create_c_alpha_dataframe(self, c_alpha_matrix):
+        '''Create a DataFrame from the C-alpha matrix.'''
         c_alpha_df = pd.DataFrame(c_alpha_matrix, columns=["X", "Y", "Z", "AA", "Mass"])
         if c_alpha_df.empty:
             print("C-alpha DataFrame is empty. Check residue names or PDB file.")
-        else:
-            print(c_alpha_df)
+        #else:
+            #print(c_alpha_df)
         return c_alpha_df
 
     def extract_c_alpha_info(self):
+        '''Extract the C-alpha atom coordinates and amino acid properties from the PDB file.'''
         c_alpha_matrix = []
         res_list = Selection.unfold_entities(self.structure, "R")
         for residue in res_list:
@@ -64,6 +73,7 @@ class ProteinAnalyzer:
         return self.create_c_alpha_dataframe(c_alpha_matrix)
 
     def calculate_pairwise_distances(self, coordinates):
+        '''Calculate the pairwise distances between C-alpha atoms.'''
         num_residues = len(coordinates)
         distance_matrix = np.zeros((num_residues, num_residues))
         for i in range(num_residues):
@@ -74,6 +84,7 @@ class ProteinAnalyzer:
         return distance_matrix
 
     def encode_amino_acid_properties(self, aa_letters):
+        '''Encode the amino acid properties for the given amino acid letters.'''
         encoded_features = []
         for aa in aa_letters:
             aa_str = aa[0]  # Convert numpy array to string
@@ -85,6 +96,7 @@ class ProteinAnalyzer:
         return np.array(encoded_features)
 
     def prepare_autoencoder_input(self):
+        '''Prepare the input DataFrame for the autoencoder.'''
         coords = self.c_alpha_df[['X', 'Y', 'Z']].values
         aa_letters = self.c_alpha_df['AA'].values.reshape(-1, 1)  # Reshape to add as a column
         encoded_features = self.encode_amino_acid_properties(aa_letters)
@@ -95,6 +107,7 @@ class ProteinAnalyzer:
 
 
     def calculate_neighborhood_info(self, neighborhood_radius=5.0):
+        '''Calculate the neighborhood information for each C-alpha atom.'''
         atom_list = [atom for atom in self.structure.get_atoms() if atom.name == 'CA']
         neighbor_search = NeighborSearch(atom_list)
         neighborhood_info = []
@@ -113,6 +126,8 @@ class ProteinAnalyzer:
 
 
     def pad_dataframe(self, df, target_shape):
+        '''Pad the DataFrame to the target shape by adding rows of zeros.
+        NOT USED currently - i pad the graph'''
         current_shape = df.shape
         if current_shape[0] >= target_shape[0] and current_shape[1] == target_shape[1]:
             return df
@@ -125,6 +140,7 @@ class ProteinAnalyzer:
         return padded_df
 
     def create_graph(df, distance_threshold=5.0):
+        '''Create a graph Data object from the input DataFrame.'''
         # Label encode the 'AA' column
         le = LabelEncoder()
         df['AA_encoded'] = le.fit_transform(df['AA'])
@@ -161,11 +177,14 @@ class ProteinAnalyzer:
         return data, le
 
     def print_graph_metrics(graph):
+        '''Print the number of nodes, edges, and the shape of the node features.
+        not sure if used anywhere...duplicate of the one in GraphCreatorOneHotEncodedVariant'''
         print(f"Number of nodes: {graph.num_nodes}")
         print(f"Number of edges: {graph.num_edges}")
         print(f"Node features shape: {graph.x.shape}")
 
     def draw_graph(graph, le):
+        '''Draw the graph using NetworkX.'''
         G = nx.Graph()
         edge_index = graph.edge_index.numpy()
         for i in range(edge_index.shape[1]):
@@ -178,14 +197,14 @@ class ProteinAnalyzer:
         nx.draw(G, pos, with_labels=True, labels={i: aa_labels[i] for i in range(len(aa_labels))}, node_color=node_colors, node_size=50, font_size=8)
         plt.show()
 
-pdb_file = '/Users/alexchilton/Downloads/archive/train/AF-D0ZA02-F1-model_v4.pdb'
-aa_info_file = 'aa_mass_letter.csv'
-analyzer = ProteinAnalyzer(pdb_file, aa_info_file)
-
-# Generate the autoencoder input DataFrame
-autoencoder_input_df = analyzer.prepare_autoencoder_input()
-
-pd.set_option('display.max_columns', None)
-
-print(autoencoder_input_df.shape)
-print(autoencoder_input_df.head())
+# pdb_file = '/Users/alexchilton/Downloads/archive/train/AF-D0ZA02-F1-model_v4.pdb'
+# aa_info_file = 'aa_mass_letter.csv'
+# analyzer = ProteinAnalyzer(pdb_file, aa_info_file)
+#
+# # Generate the autoencoder input DataFrame
+# autoencoder_input_df = analyzer.prepare_autoencoder_input()
+#
+# pd.set_option('display.max_columns', None)
+#
+# print(autoencoder_input_df.shape)
+# print(autoencoder_input_df.head())
