@@ -6,9 +6,13 @@ from sklearn.preprocessing import LabelEncoder
 import networkx as nx
 import matplotlib.pyplot as plt
 from ProteinAnalyzer import ProteinAnalyzer
+import networkx as nx
+import torch
+from torch_geometric.utils import to_networkx, from_networkx
 class GraphCreatorOneHotEncodedVariant:
 
     def create_graph(self, df, distance_threshold=5.0):
+        '''Create a graph from the DataFrame.'''
         # Ensure all columns are numeric
         df[['X', 'Y', 'Z', 'Avg_Mass', 'Avg_Neighbor_Dist', 'Max_Neighbor_Dist', 'Neighbor_Count', 'AA_A', 'AA_C', 'AA_D', 'AA_E', 'AA_F', 'AA_G', 'AA_H', 'AA_I', 'AA_K', 'AA_L', 'AA_M', 'AA_N', 'AA_P', 'AA_Q', 'AA_R', 'AA_S', 'AA_T', 'AA_V', 'AA_W', 'AA_Y']]\
             = df[['X', 'Y', 'Z', 'Avg_Mass', 'Avg_Neighbor_Dist', 'Max_Neighbor_Dist', 'Neighbor_Count', 'AA_A', 'AA_C', 'AA_D', 'AA_E', 'AA_F', 'AA_G', 'AA_H', 'AA_I', 'AA_K', 'AA_L', 'AA_M', 'AA_N', 'AA_P', 'AA_Q', 'AA_R', 'AA_S', 'AA_T', 'AA_V', 'AA_W', 'AA_Y']].apply(pd.to_numeric, errors='coerce')
@@ -41,11 +45,13 @@ class GraphCreatorOneHotEncodedVariant:
         return data
 
     def print_graph_metrics(self, graph):
+        '''Print the number of nodes, edges, and the shape of the node features.'''
         print(f"Number of nodes: {graph.num_nodes}")
         print(f"Number of edges: {graph.num_edges}")
         print(f"Node features shape: {graph.x.shape}")
 
     def draw_graph(self, graph, onehot_encoder):
+        ''''''
         g = nx.Graph()
         edge_index = graph.edge_index.numpy()
         for i in range(edge_index.shape[1]):
@@ -92,6 +98,7 @@ class GraphCreatorOneHotEncodedVariant:
 
     # Update the decode_values function
     def decode_values(self, encoded_df, onehot_encoder, original_column_name='AA'):
+        ''''''
         encoded_columns = onehot_encoder.get_feature_names_out([original_column_name])
         encoded_values = encoded_df[encoded_columns].values
         decoded_values = onehot_encoder.inverse_transform(encoded_values)
@@ -100,6 +107,7 @@ class GraphCreatorOneHotEncodedVariant:
         return decoded_df
 
     def pad_graphs(self,  graphs, max_nodes):
+        ''''''
         padded_graphs = []
         for graph in graphs:
             num_nodes = graph.x.size(0)
@@ -117,3 +125,57 @@ class GraphCreatorOneHotEncodedVariant:
             else:
                 padded_graphs.append(graph)
         return padded_graphs
+
+    def convert_graphs_to_one_hot(self,graphs, prefix='AA_'):
+        '''converts the AA columns to one-hot encoded values'''
+        for graph in graphs:
+            # Identify the columns that start with the given prefix
+            one_hot_columns = [i for i, col in enumerate(graph.x[0]) if i >= 7 and i <= 26]  # Assuming AA_ columns are from index 7 to 26
+
+            # Apply argmax to each row to find the index of the maximum value
+            max_indices = torch.argmax(graph.x[:, one_hot_columns], dim=1)
+
+            # Create a new tensor with zeros
+            one_hot_encoded = torch.zeros_like(graph.x[:, one_hot_columns])
+
+            # Set the maximum index positions to 1
+            one_hot_encoded[torch.arange(graph.x.size(0)), max_indices] = 1
+
+            # Replace the original columns with the new one-hot encoded values
+            graph.x[:, one_hot_columns] = one_hot_encoded
+
+        return graphs
+
+    def prune_small_subgraphs(self, graph):
+        '''Prune small subgraphs from the input graph.'''
+        # Convert the PyTorch Geometric graph to a NetworkX graph
+        g = to_networkx(graph, to_undirected=True)
+
+        # Find all connected components
+        connected_components = list(nx.connected_components(g))
+
+        # Find the largest connected component
+        largest_component = max(connected_components, key=len)
+
+        # Create a subgraph containing only the largest connected component
+        largest_subgraph = g.subgraph(largest_component).copy()
+
+        # Convert the NetworkX subgraph back to a PyTorch Geometric graph
+        pruned_graph = from_networkx(largest_subgraph)
+
+        # Ensure the node features are preserved
+        pruned_graph.x = graph.x[list(largest_component)]
+
+        return pruned_graph
+
+    def print_graphCollection_metrics(self, graphs):
+        '''Print the number of nodes, edges, and features for each graph in the'''
+        for i, graph in enumerate(graphs[:10]):
+            print(f"Graph {i + 1}: {graph.num_nodes} nodes, {graph.num_edges} edges, {graph.num_node_features} features")
+
+    def print_first_graph(self, graph):
+        '''Print the features of the first graph in the collection.'''
+        # Print each node's features for the first padded graph
+        first_graph = graph[0]
+        for i, node_features in enumerate(first_graph.x):
+            print(f"Node {i + 1}: {node_features}")
