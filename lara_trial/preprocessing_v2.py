@@ -157,34 +157,50 @@ class ProteinAnalyzer4:
                     if residue.get_resname() in self.small_molecules:
                         for atom in residue:
                             coords = atom.get_coord()
+                            
+                            # Skip if coordinates are missing
+                            if coords is None or not np.isfinite(coords).all():
+                                print(f"Skipping molecule {residue.get_resname()} due to invalid coords")
+                            continue
+
                             neighbors = tree.query_ball_point(coords, self.neighborhood_radius)
 
+                            # Skip if no neighbors --> new piece added
+                            if not neighbors:  
+                                continue
+
+                            # from here still old part <-----
                             distances = [
                                 np.linalg.norm(coords - ca_atoms[neighbor_idx].get_coord())
                                 for neighbor_idx in neighbors
                             ]
 
-                            if distances:
-                                avg_distance = np.mean(distances)
-                                max_distance = np.max(distances)
-                                count_neighbors = len(distances)
+                            # Skip molecules with no valid distances--> new piece added
+                            if not distances:
+                                continue
 
-                                for neighbor_idx in neighbors:
-                                    residue_idx = ca_indices.get(ca_atoms[neighbor_idx].get_parent().get_id(), None)
+                            # from here still old part <-----
+                            #distances:
+                            avg_distance = np.mean(distances)
+                            max_distance = np.max(distances)
+                            count_neighbors = len(distances)
 
-                                    if residue_idx is not None:
-                                        residue_molecules[residue_idx]['avg_distance'] += avg_distance
-                                        residue_molecules[residue_idx]['max_distance'] = max(
-                                            residue_molecules[residue_idx]['max_distance'],
-                                            max_distance
-                                        )
-                                        residue_molecules[residue_idx]['count_neighbors'] += count_neighbors
-                                        residue_molecules[residue_idx]['molecules'].append({
-                                            'type': residue.get_resname(),
-                                            'avg_distance': avg_distance,
-                                            'max_distance': max_distance,
-                                            'count_neighbors': count_neighbors
-                                        })
+                            for neighbor_idx in neighbors:
+                                residue_idx = ca_indices.get(ca_atoms[neighbor_idx].get_parent().get_id(), None)
+
+                                if residue_idx is not None:
+                                    residue_molecules[residue_idx]['avg_distance'] += avg_distance
+                                    residue_molecules[residue_idx]['max_distance'] = max(
+                                        residue_molecules[residue_idx]['max_distance'],
+                                        max_distance
+                                    )
+                                    residue_molecules[residue_idx]['count_neighbors'] += count_neighbors
+                                    residue_molecules[residue_idx]['molecules'].append({
+                                        'type': residue.get_resname(),
+                                        'avg_distance': avg_distance,
+                                        'max_distance': max_distance,
+                                        'count_neighbors': count_neighbors
+                                    })
 
         # Normalize avg_distance by dividing by the count of neighbors
         for idx, data in residue_molecules.items():
@@ -198,9 +214,7 @@ class ProteinAnalyzer4:
 
 
 
-
-
-
+    
 
 
 
@@ -256,6 +270,7 @@ class ProteinAnalyzer4:
 
         # Add molecule counts for each residue
         molecule_data = []
+        
         for idx, data in self.residue_molecules.items():
             for mol in data['molecules']:
                 molecule_data.append({
